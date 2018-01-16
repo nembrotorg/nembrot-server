@@ -1,0 +1,22 @@
+- document_title = "#{ t('.title') } | #{ t('devise.title') } | #{ t('site.title') }"
+- set_meta_tags title: document_title
+
+- add_breadcrumb t('devise.sessions.new.title'), new_user_session_path
+- add_breadcrumb t('.title'), new_confirmation_path(@user)
+
+div class="#{ controller.controller_name }-#{ controller.action_name }"
+
+  nav = render_breadcrumbs builder: ::OrderedListBuilder
+
+  = render 'header', title: t('.title'), subtitle: nil, document_title: document_title
+
+  = form_for(resource, as: resource_name, url: confirmation_path(resource_name), html: { method: :post }) do |f|
+    = devise_error_messages!
+
+    = f.label :email do
+      = :email.to_s.humanize
+      = f.email_field :email, autofocus: true
+
+    = f.submit t('.title')
+
+  = render 'devise/shared/links'

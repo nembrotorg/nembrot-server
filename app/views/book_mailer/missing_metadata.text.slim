@@ -1,0 +1,17 @@
+=t('email.greeting', name: NB.admin_name)
+| \
+=t('books.sync.failed.missing_metadata.email.body')
+| \
+="ISBN: #{ @isbn }"
+="Author: #{ @author }"
+="Title: #{ @title }"
+="Published date: #{ @published_date }"
+| \
+="http://#{ NB.host }/admin/book/#{ @id }/edit"
+| \
+="http://www.amazon.com/s/?field-keywords=#{ @isbn }"
+| \
+="http://www.worldcat.org/search?qt=worldcat_org_bks&q=#{ @isbn }"
+| \
+=t('email.signature')
+=@host

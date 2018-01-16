@@ -1,0 +1,25 @@
+- document_title = "#{ t('.title') } | #{ t('site.title') }"
+- set_meta_tags title: document_title,
+                description: '',
+                open_graph: { title: document_title }
+
+div class="#{ controller.controller_name }-#{ controller.action_name }"
+
+  nav = render_breadcrumbs builder: ::OrderedListBuilder
+
+  section
+
+    = render 'header', title: t('.title'), subtitle: nil, document_title: document_title
+
+
+    form action="#{ update_settings_path }" method="post"
+
+      fieldset
+        - @settings.each do |key, value|
+          label for="#{ key.to_param }"
+            | #{ key.gsub(/^.*?\./, '').humanize }:
+            input name="settings[#{ key }]" type="text" value="#{ value }"
+
+        input name="_method" type="hidden" value="put"
+        = token_tag form_authenticity_token
+        input type="submit" value="Save"

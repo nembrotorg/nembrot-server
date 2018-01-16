@@ -1,0 +1,43 @@
+# Ignore bundler config
+/.bundle
+
+# Ignore the default SQLite database.
+/db/*.sqlite3
+
+# Ignore all logfiles and tempfiles.
+/log/*.log
+/tmp
+
+# Ignore other unneeded files.
+!sitemap.rb
+*.swp
+*~
+.DS_Store
+.gitattributes
+.irb-history
+.project
+.ruby-gemset
+.ruby-version
+.rvmrc
+doc/
+sitemap.*
+!sitemap.rb
+
+# Ignore files with passwords etc (except sample and model files)
+/config/advanced.constants.yml
+/config/channel.constants.yml
+/config/secret.yml
+/config/database.yml
+
+# Ignore resource files
+/public/resources/*/*.*
+!/public/resources/cut/blank.*
+
+* Ignore trial folders
+trial
+
+* Ignore coverage
+coverage
+
+# Ignore application configuration
+/config/application.yml
