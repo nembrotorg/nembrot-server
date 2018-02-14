@@ -12,6 +12,7 @@ class Note < ActiveRecord::Base
   has_and_belongs_to_many :books
 
   enum content_type: [ :note, :citation, :link ]
+  enum role_visibility: [ :public, :user, :reader, :editor, :author, :admin ]
 
   acts_as_commontable
 

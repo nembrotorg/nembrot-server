@@ -2,8 +2,8 @@
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 9.5.10
--- Dumped by pg_dump version 9.5.10
+-- Dumped from database version 9.5.11
+-- Dumped by pg_dump version 9.5.11
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -12,6 +12,13 @@ SET standard_conforming_strings = on;
 SET check_function_bodies = false;
 SET client_min_messages = warning;
 SET row_security = off;
+
+--
+-- Name: api; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA api;
+
 
 --
 -- Name: postgraphql_watch; Type: SCHEMA; Schema: -; Owner: -
@@ -32,6 +39,66 @@ CREATE EXTENSION IF NOT EXISTS plpgsql WITH SCHEMA pg_catalog;
 --
 
 COMMENT ON EXTENSION plpgsql IS 'PL/pgSQL procedural language';
+
+
+SET search_path = api, pg_catalog;
+
+--
+-- Name: activetags; Type: TYPE; Schema: api; Owner: -
+--
+
+CREATE TYPE activetags AS (
+	name character varying(255),
+	slug character varying(255),
+	active_tags_count integer
+);
+
+
+--
+-- Name: active_notes_id(); Type: FUNCTION; Schema: api; Owner: -
+--
+
+CREATE FUNCTION active_notes_id() RETURNS TABLE(id integer)
+    LANGUAGE sql STABLE
+    AS $$
+        SELECT notes.id
+         FROM notes
+         WHERE notes.active = 't'
+           AND notes.hide = 'f'
+         ORDER BY weight ASC, external_updated_at DESC
+      $$;
+
+
+--
+-- Name: active_tags(); Type: FUNCTION; Schema: api; Owner: -
+--
+
+CREATE FUNCTION active_tags() RETURNS SETOF activetags
+    LANGUAGE sql STABLE
+    AS $$
+        SELECT tags.name, tags.slug, active_tags_count
+        FROM tags
+        JOIN
+          (SELECT taggings.tag_id,
+                  CAST(COUNT(taggings.tag_id) AS integer) AS active_tags_count
+           FROM taggings
+           INNER JOIN notes ON notes.id = taggings.taggable_id
+           WHERE (taggings.taggable_type = 'Note'
+                  AND taggings.context = 'tags')
+             AND (taggings.taggable_id = any(SELECT * FROM api.active_notes_id()))
+           GROUP BY taggings.tag_id
+           HAVING COUNT(taggings.tag_id) >= 2) AS taggings ON taggings.tag_id = tags.id
+        ORDER BY slug
+        LIMIT 120
+        OFFSET 0
+      $$;
+
+
+--
+-- Name: FUNCTION active_tags(); Type: COMMENT; Schema: api; Owner: -
+--
+
+COMMENT ON FUNCTION active_tags() IS 'Reads and enables pagination through a set of `Tag` - only tags that are associated with at least two active notes, citations or links are returned.';
 
 
 SET search_path = postgraphql_watch, pg_catalog;
@@ -1519,4 +1586,6 @@ INSERT INTO schema_migrations (version) VALUES ('20150824083025');
 INSERT INTO schema_migrations (version) VALUES ('20150824083031');
 
 INSERT INTO schema_migrations (version) VALUES ('20171213111501');
+
+INSERT INTO schema_migrations (version) VALUES ('20171218151456');
 
