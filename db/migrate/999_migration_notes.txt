@@ -1,0 +1,7 @@
+Roll back and improve
+- Add id to logged_in_user
+- Use better secret
+
+postgraphile -w --cors -c "postgres://postgres:itTieni10@localhost:5432/joegattnet" -s "api" --extended-errors 'hint,detail,errcode' --jwt-secret 'kemmtridbombi' --token api.jwt_token
+
+Create forms for creating the user and logging in

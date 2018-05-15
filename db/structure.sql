@@ -2,13 +2,14 @@
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 9.5.11
--- Dumped by pg_dump version 9.5.11
+-- Dumped from database version 9.5.12
+-- Dumped by pg_dump version 9.5.12
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
 SET client_encoding = 'UTF8';
 SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
 SET check_function_bodies = false;
 SET client_min_messages = warning;
 SET row_security = off;
@@ -18,6 +19,13 @@ SET row_security = off;
 --
 
 CREATE SCHEMA api;
+
+
+--
+-- Name: postgraphile_watch; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA postgraphile_watch;
 
 
 --
@@ -41,13 +49,25 @@ CREATE EXTENSION IF NOT EXISTS plpgsql WITH SCHEMA pg_catalog;
 COMMENT ON EXTENSION plpgsql IS 'PL/pgSQL procedural language';
 
 
-SET search_path = api, pg_catalog;
-
 --
--- Name: activetags; Type: TYPE; Schema: api; Owner: -
+-- Name: pgcrypto; Type: EXTENSION; Schema: -; Owner: -
 --
 
-CREATE TYPE activetags AS (
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
+
+
+--
+-- Name: EXTENSION pgcrypto; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON EXTENSION pgcrypto IS 'cryptographic functions';
+
+
+--
+-- Name: denormalizedtags; Type: TYPE; Schema: api; Owner: -
+--
+
+CREATE TYPE api.denormalizedtags AS (
 	name character varying(255),
 	slug character varying(255),
 	active_tags_count integer
@@ -55,25 +75,31 @@ CREATE TYPE activetags AS (
 
 
 --
--- Name: active_notes_id(); Type: FUNCTION; Schema: api; Owner: -
+-- Name: jwt_token; Type: TYPE; Schema: api; Owner: -
 --
 
-CREATE FUNCTION active_notes_id() RETURNS TABLE(id integer)
-    LANGUAGE sql STABLE
-    AS $$
-        SELECT notes.id
-         FROM notes
-         WHERE notes.active = 't'
-           AND notes.hide = 'f'
-         ORDER BY weight ASC, external_updated_at DESC
-      $$;
+CREATE TYPE api.jwt_token AS (
+	role integer,
+	user_id integer
+);
+
+
+--
+-- Name: logged_in_user; Type: TYPE; Schema: api; Owner: -
+--
+
+CREATE TYPE api.logged_in_user AS (
+	first_name text,
+	last_name text,
+	email text
+);
 
 
 --
 -- Name: active_tags(); Type: FUNCTION; Schema: api; Owner: -
 --
 
-CREATE FUNCTION active_tags() RETURNS SETOF activetags
+CREATE FUNCTION api.active_tags() RETURNS SETOF api.denormalizedtags
     LANGUAGE sql STABLE
     AS $$
         SELECT tags.name, tags.slug, active_tags_count
@@ -85,7 +111,7 @@ CREATE FUNCTION active_tags() RETURNS SETOF activetags
            INNER JOIN notes ON notes.id = taggings.taggable_id
            WHERE (taggings.taggable_type = 'Note'
                   AND taggings.context = 'tags')
-             AND (taggings.taggable_id = any(SELECT * FROM api.active_notes_id()))
+             AND (taggings.taggable_id = any(SELECT * FROM active_notes_id()))
            GROUP BY taggings.tag_id
            HAVING COUNT(taggings.tag_id) >= 2) AS taggings ON taggings.tag_id = tags.id
         ORDER BY slug
@@ -98,21 +124,127 @@ CREATE FUNCTION active_tags() RETURNS SETOF activetags
 -- Name: FUNCTION active_tags(); Type: COMMENT; Schema: api; Owner: -
 --
 
-COMMENT ON FUNCTION active_tags() IS 'Reads and enables pagination through a set of `Tag` - only tags that are associated with at least two active notes, citations or links are returned.';
+COMMENT ON FUNCTION api.active_tags() IS 'Reads and enables pagination through a set of `Tag` - only tags that are associated with at least two active notes, citations or links are returned.';
 
 
-SET search_path = postgraphql_watch, pg_catalog;
+--
+-- Name: authenticate(text, text); Type: FUNCTION; Schema: api; Owner: -
+--
+
+CREATE FUNCTION api.authenticate(email text, password text) RETURNS api.jwt_token
+    LANGUAGE plpgsql STRICT SECURITY DEFINER
+    AS $_$
+        BEGIN
+          SELECT a.* AS authenticated_user
+          FROM users AS a
+          WHERE a.email = $1;
+
+          IF password = crypt(password, gen_salt('bf')) THEN
+            RETURN ('user', authenticated_user.id)::api.jwt_token;
+          ELSE
+            RETURN null;
+          END IF;
+        END;
+      $_$;
+
+
+--
+-- Name: FUNCTION authenticate(email text, password text); Type: COMMENT; Schema: api; Owner: -
+--
+
+COMMENT ON FUNCTION api.authenticate(email text, password text) IS 'Creates a JWT token that will securely identify a person and give them certain permissions.';
+
+
+--
+-- Name: register_user(text, text, text, text); Type: FUNCTION; Schema: api; Owner: -
+--
+
+CREATE FUNCTION api.register_user(first_name text, last_name text, email text, password text) RETURNS api.logged_in_user
+    LANGUAGE plpgsql STRICT SECURITY DEFINER
+    AS $$
+        DECLARE
+          person api.logged_in_user;
+        BEGIN
+          INSERT INTO users (first_name, last_name, email, password) VALUES
+            (first_name, last_name, email, crypt(password, gen_salt('bf')))
+            RETURNING * INTO person;
+          RETURN person;
+        END;
+      $$;
+
+
+--
+-- Name: FUNCTION register_user(first_name text, last_name text, email text, password text); Type: COMMENT; Schema: api; Owner: -
+--
+
+COMMENT ON FUNCTION api.register_user(first_name text, last_name text, email text, password text) IS 'Registers a single user and creates an account in our forum.';
+
+
+--
+-- Name: notify_watchers_ddl(); Type: FUNCTION; Schema: postgraphile_watch; Owner: -
+--
+
+CREATE FUNCTION postgraphile_watch.notify_watchers_ddl() RETURNS event_trigger
+    LANGUAGE plpgsql
+    AS $$
+begin
+  perform pg_notify(
+    'postgraphile_watch',
+    json_build_object(
+      'type',
+      'ddl',
+      'payload',
+      (select json_agg(json_build_object('schema', schema_name, 'command', command_tag)) from pg_event_trigger_ddl_commands() as x)
+    )::text
+  );
+end;
+$$;
+
+
+--
+-- Name: notify_watchers_drop(); Type: FUNCTION; Schema: postgraphile_watch; Owner: -
+--
+
+CREATE FUNCTION postgraphile_watch.notify_watchers_drop() RETURNS event_trigger
+    LANGUAGE plpgsql
+    AS $$
+begin
+  perform pg_notify(
+    'postgraphile_watch',
+    json_build_object(
+      'type',
+      'drop',
+      'payload',
+      (select json_agg(distinct x.schema_name) from pg_event_trigger_dropped_objects() as x)
+    )::text
+  );
+end;
+$$;
+
 
 --
 -- Name: notify_watchers(); Type: FUNCTION; Schema: postgraphql_watch; Owner: -
 --
 
-CREATE FUNCTION notify_watchers() RETURNS event_trigger
+CREATE FUNCTION postgraphql_watch.notify_watchers() RETURNS event_trigger
     LANGUAGE plpgsql
     AS $$ begin perform pg_notify( 'postgraphql_watch', (select array_to_json(array_agg(x)) from (select schema_name as schema, command_tag as command from pg_event_trigger_ddl_commands()) as x)::text ); end; $$;
 
 
-SET search_path = public, pg_catalog;
+--
+-- Name: active_notes_id(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.active_notes_id() RETURNS TABLE(id integer)
+    LANGUAGE sql STABLE
+    AS $$
+        SELECT notes.id
+         FROM notes
+         WHERE notes.active = 't'
+           AND notes.hide = 'f'
+         ORDER BY weight ASC, external_updated_at DESC
+      $$;
+
 
 SET default_tablespace = '';
 
@@ -122,7 +254,7 @@ SET default_with_oids = false;
 -- Name: authorizations; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE authorizations (
+CREATE TABLE public.authorizations (
     id integer NOT NULL,
     provider character varying(255),
     uid character varying(255),
@@ -141,7 +273,7 @@ CREATE TABLE authorizations (
 -- Name: authorizations_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE authorizations_id_seq
+CREATE SEQUENCE public.authorizations_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -153,14 +285,14 @@ CREATE SEQUENCE authorizations_id_seq
 -- Name: authorizations_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE authorizations_id_seq OWNED BY authorizations.id;
+ALTER SEQUENCE public.authorizations_id_seq OWNED BY public.authorizations.id;
 
 
 --
 -- Name: books; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE books (
+CREATE TABLE public.books (
     id integer NOT NULL,
     title character varying(255),
     author character varying(255),
@@ -196,7 +328,7 @@ CREATE TABLE books (
 -- Name: books_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE books_id_seq
+CREATE SEQUENCE public.books_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -208,14 +340,14 @@ CREATE SEQUENCE books_id_seq
 -- Name: books_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE books_id_seq OWNED BY books.id;
+ALTER SEQUENCE public.books_id_seq OWNED BY public.books.id;
 
 
 --
 -- Name: books_notes; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE books_notes (
+CREATE TABLE public.books_notes (
     id integer NOT NULL,
     book_id integer,
     note_id integer
@@ -226,7 +358,7 @@ CREATE TABLE books_notes (
 -- Name: books_notes_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE books_notes_id_seq
+CREATE SEQUENCE public.books_notes_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -238,14 +370,14 @@ CREATE SEQUENCE books_notes_id_seq
 -- Name: books_notes_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE books_notes_id_seq OWNED BY books_notes.id;
+ALTER SEQUENCE public.books_notes_id_seq OWNED BY public.books_notes.id;
 
 
 --
 -- Name: commontator_comments; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE commontator_comments (
+CREATE TABLE public.commontator_comments (
     id integer NOT NULL,
     creator_type character varying(255),
     creator_id integer,
@@ -266,7 +398,7 @@ CREATE TABLE commontator_comments (
 -- Name: commontator_comments_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE commontator_comments_id_seq
+CREATE SEQUENCE public.commontator_comments_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -278,14 +410,14 @@ CREATE SEQUENCE commontator_comments_id_seq
 -- Name: commontator_comments_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE commontator_comments_id_seq OWNED BY commontator_comments.id;
+ALTER SEQUENCE public.commontator_comments_id_seq OWNED BY public.commontator_comments.id;
 
 
 --
 -- Name: commontator_subscriptions; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE commontator_subscriptions (
+CREATE TABLE public.commontator_subscriptions (
     id integer NOT NULL,
     subscriber_type character varying(255) NOT NULL,
     subscriber_id integer NOT NULL,
@@ -300,7 +432,7 @@ CREATE TABLE commontator_subscriptions (
 -- Name: commontator_subscriptions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE commontator_subscriptions_id_seq
+CREATE SEQUENCE public.commontator_subscriptions_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -312,14 +444,14 @@ CREATE SEQUENCE commontator_subscriptions_id_seq
 -- Name: commontator_subscriptions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE commontator_subscriptions_id_seq OWNED BY commontator_subscriptions.id;
+ALTER SEQUENCE public.commontator_subscriptions_id_seq OWNED BY public.commontator_subscriptions.id;
 
 
 --
 -- Name: commontator_threads; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE commontator_threads (
+CREATE TABLE public.commontator_threads (
     id integer NOT NULL,
     commontable_type character varying(255),
     commontable_id integer,
@@ -335,7 +467,7 @@ CREATE TABLE commontator_threads (
 -- Name: commontator_threads_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE commontator_threads_id_seq
+CREATE SEQUENCE public.commontator_threads_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -347,14 +479,14 @@ CREATE SEQUENCE commontator_threads_id_seq
 -- Name: commontator_threads_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE commontator_threads_id_seq OWNED BY commontator_threads.id;
+ALTER SEQUENCE public.commontator_threads_id_seq OWNED BY public.commontator_threads.id;
 
 
 --
 -- Name: evernote_notes; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE evernote_notes (
+CREATE TABLE public.evernote_notes (
     id integer NOT NULL,
     cloud_note_identifier character varying(255),
     note_id integer,
@@ -371,7 +503,7 @@ CREATE TABLE evernote_notes (
 -- Name: evernote_notes_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE evernote_notes_id_seq
+CREATE SEQUENCE public.evernote_notes_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -383,14 +515,14 @@ CREATE SEQUENCE evernote_notes_id_seq
 -- Name: evernote_notes_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE evernote_notes_id_seq OWNED BY evernote_notes.id;
+ALTER SEQUENCE public.evernote_notes_id_seq OWNED BY public.evernote_notes.id;
 
 
 --
 -- Name: notes; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE notes (
+CREATE TABLE public.notes (
     id integer NOT NULL,
     title character varying(255) NOT NULL,
     body text,
@@ -444,7 +576,7 @@ CREATE TABLE notes (
 -- Name: notes_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE notes_id_seq
+CREATE SEQUENCE public.notes_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -456,14 +588,14 @@ CREATE SEQUENCE notes_id_seq
 -- Name: notes_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE notes_id_seq OWNED BY notes.id;
+ALTER SEQUENCE public.notes_id_seq OWNED BY public.notes.id;
 
 
 --
 -- Name: pantographers; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE pantographers (
+CREATE TABLE public.pantographers (
     id integer NOT NULL,
     twitter_screen_name character varying(255),
     twitter_real_name character varying(255),
@@ -477,7 +609,7 @@ CREATE TABLE pantographers (
 -- Name: pantographers_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE pantographers_id_seq
+CREATE SEQUENCE public.pantographers_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -489,14 +621,14 @@ CREATE SEQUENCE pantographers_id_seq
 -- Name: pantographers_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE pantographers_id_seq OWNED BY pantographers.id;
+ALTER SEQUENCE public.pantographers_id_seq OWNED BY public.pantographers.id;
 
 
 --
 -- Name: pantographs; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE pantographs (
+CREATE TABLE public.pantographs (
     id integer NOT NULL,
     text character varying(140),
     external_created_at timestamp without time zone,
@@ -511,7 +643,7 @@ CREATE TABLE pantographs (
 -- Name: pantographs_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE pantographs_id_seq
+CREATE SEQUENCE public.pantographs_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -523,14 +655,14 @@ CREATE SEQUENCE pantographs_id_seq
 -- Name: pantographs_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE pantographs_id_seq OWNED BY pantographs.id;
+ALTER SEQUENCE public.pantographs_id_seq OWNED BY public.pantographs.id;
 
 
 --
 -- Name: rails_admin_histories; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE rails_admin_histories (
+CREATE TABLE public.rails_admin_histories (
     id integer NOT NULL,
     message text,
     username character varying(255),
@@ -547,7 +679,7 @@ CREATE TABLE rails_admin_histories (
 -- Name: rails_admin_histories_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE rails_admin_histories_id_seq
+CREATE SEQUENCE public.rails_admin_histories_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -559,14 +691,14 @@ CREATE SEQUENCE rails_admin_histories_id_seq
 -- Name: rails_admin_histories_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE rails_admin_histories_id_seq OWNED BY rails_admin_histories.id;
+ALTER SEQUENCE public.rails_admin_histories_id_seq OWNED BY public.rails_admin_histories.id;
 
 
 --
 -- Name: resources; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE resources (
+CREATE TABLE public.resources (
     id integer NOT NULL,
     cloud_resource_identifier character varying(255),
     mime character varying(255),
@@ -598,7 +730,7 @@ CREATE TABLE resources (
 -- Name: resources_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE resources_id_seq
+CREATE SEQUENCE public.resources_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -610,14 +742,14 @@ CREATE SEQUENCE resources_id_seq
 -- Name: resources_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE resources_id_seq OWNED BY resources.id;
+ALTER SEQUENCE public.resources_id_seq OWNED BY public.resources.id;
 
 
 --
 -- Name: schema_migrations; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE schema_migrations (
+CREATE TABLE public.schema_migrations (
     version character varying(255) NOT NULL
 );
 
@@ -626,7 +758,7 @@ CREATE TABLE schema_migrations (
 -- Name: sessions; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE sessions (
+CREATE TABLE public.sessions (
     id integer NOT NULL,
     session_id character varying(255) NOT NULL,
     data text,
@@ -639,7 +771,7 @@ CREATE TABLE sessions (
 -- Name: sessions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE sessions_id_seq
+CREATE SEQUENCE public.sessions_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -651,14 +783,14 @@ CREATE SEQUENCE sessions_id_seq
 -- Name: sessions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE sessions_id_seq OWNED BY sessions.id;
+ALTER SEQUENCE public.sessions_id_seq OWNED BY public.sessions.id;
 
 
 --
 -- Name: taggings; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE taggings (
+CREATE TABLE public.taggings (
     id integer NOT NULL,
     tag_id integer,
     taggable_id integer,
@@ -674,7 +806,7 @@ CREATE TABLE taggings (
 -- Name: taggings_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE taggings_id_seq
+CREATE SEQUENCE public.taggings_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -686,14 +818,14 @@ CREATE SEQUENCE taggings_id_seq
 -- Name: taggings_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE taggings_id_seq OWNED BY taggings.id;
+ALTER SEQUENCE public.taggings_id_seq OWNED BY public.taggings.id;
 
 
 --
 -- Name: tags; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE tags (
+CREATE TABLE public.tags (
     id integer NOT NULL,
     name character varying(255),
     slug character varying(255),
@@ -705,7 +837,7 @@ CREATE TABLE tags (
 -- Name: tags_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE tags_id_seq
+CREATE SEQUENCE public.tags_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -717,14 +849,14 @@ CREATE SEQUENCE tags_id_seq
 -- Name: tags_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE tags_id_seq OWNED BY tags.id;
+ALTER SEQUENCE public.tags_id_seq OWNED BY public.tags.id;
 
 
 --
 -- Name: users; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE users (
+CREATE TABLE public.users (
     id integer NOT NULL,
     reset_password_token character varying(255),
     reset_password_sent_at timestamp without time zone,
@@ -736,7 +868,6 @@ CREATE TABLE users (
     last_sign_in_ip character varying(255),
     created_at timestamp without time zone NOT NULL,
     updated_at timestamp without time zone NOT NULL,
-    role character varying(255),
     location character varying(255),
     name character varying(255),
     nickname character varying(255),
@@ -749,7 +880,8 @@ CREATE TABLE users (
     confirmed_at timestamp without time zone,
     confirmation_sent_at timestamp without time zone,
     unconfirmed_email character varying(255),
-    remember_token character varying(255)
+    remember_token character varying(255),
+    role integer DEFAULT 0 NOT NULL
 );
 
 
@@ -757,7 +889,7 @@ CREATE TABLE users (
 -- Name: users_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE users_id_seq
+CREATE SEQUENCE public.users_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -769,14 +901,14 @@ CREATE SEQUENCE users_id_seq
 -- Name: users_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE users_id_seq OWNED BY users.id;
+ALTER SEQUENCE public.users_id_seq OWNED BY public.users.id;
 
 
 --
 -- Name: versions; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE versions (
+CREATE TABLE public.versions (
     id integer NOT NULL,
     item_type character varying(255) NOT NULL,
     item_id integer NOT NULL,
@@ -797,7 +929,7 @@ CREATE TABLE versions (
 -- Name: versions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE versions_id_seq
+CREATE SEQUENCE public.versions_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -809,14 +941,14 @@ CREATE SEQUENCE versions_id_seq
 -- Name: versions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE versions_id_seq OWNED BY versions.id;
+ALTER SEQUENCE public.versions_id_seq OWNED BY public.versions.id;
 
 
 --
 -- Name: votes; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE votes (
+CREATE TABLE public.votes (
     id integer NOT NULL,
     votable_id integer,
     votable_type character varying(255),
@@ -834,7 +966,7 @@ CREATE TABLE votes (
 -- Name: votes_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE votes_id_seq
+CREATE SEQUENCE public.votes_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -846,140 +978,140 @@ CREATE SEQUENCE votes_id_seq
 -- Name: votes_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE votes_id_seq OWNED BY votes.id;
+ALTER SEQUENCE public.votes_id_seq OWNED BY public.votes.id;
 
 
 --
 -- Name: id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY authorizations ALTER COLUMN id SET DEFAULT nextval('authorizations_id_seq'::regclass);
+ALTER TABLE ONLY public.authorizations ALTER COLUMN id SET DEFAULT nextval('public.authorizations_id_seq'::regclass);
 
 
 --
 -- Name: id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY books ALTER COLUMN id SET DEFAULT nextval('books_id_seq'::regclass);
+ALTER TABLE ONLY public.books ALTER COLUMN id SET DEFAULT nextval('public.books_id_seq'::regclass);
 
 
 --
 -- Name: id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY books_notes ALTER COLUMN id SET DEFAULT nextval('books_notes_id_seq'::regclass);
+ALTER TABLE ONLY public.books_notes ALTER COLUMN id SET DEFAULT nextval('public.books_notes_id_seq'::regclass);
 
 
 --
 -- Name: id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY commontator_comments ALTER COLUMN id SET DEFAULT nextval('commontator_comments_id_seq'::regclass);
+ALTER TABLE ONLY public.commontator_comments ALTER COLUMN id SET DEFAULT nextval('public.commontator_comments_id_seq'::regclass);
 
 
 --
 -- Name: id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY commontator_subscriptions ALTER COLUMN id SET DEFAULT nextval('commontator_subscriptions_id_seq'::regclass);
+ALTER TABLE ONLY public.commontator_subscriptions ALTER COLUMN id SET DEFAULT nextval('public.commontator_subscriptions_id_seq'::regclass);
 
 
 --
 -- Name: id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY commontator_threads ALTER COLUMN id SET DEFAULT nextval('commontator_threads_id_seq'::regclass);
+ALTER TABLE ONLY public.commontator_threads ALTER COLUMN id SET DEFAULT nextval('public.commontator_threads_id_seq'::regclass);
 
 
 --
 -- Name: id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY evernote_notes ALTER COLUMN id SET DEFAULT nextval('evernote_notes_id_seq'::regclass);
+ALTER TABLE ONLY public.evernote_notes ALTER COLUMN id SET DEFAULT nextval('public.evernote_notes_id_seq'::regclass);
 
 
 --
 -- Name: id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY notes ALTER COLUMN id SET DEFAULT nextval('notes_id_seq'::regclass);
+ALTER TABLE ONLY public.notes ALTER COLUMN id SET DEFAULT nextval('public.notes_id_seq'::regclass);
 
 
 --
 -- Name: id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY pantographers ALTER COLUMN id SET DEFAULT nextval('pantographers_id_seq'::regclass);
+ALTER TABLE ONLY public.pantographers ALTER COLUMN id SET DEFAULT nextval('public.pantographers_id_seq'::regclass);
 
 
 --
 -- Name: id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY pantographs ALTER COLUMN id SET DEFAULT nextval('pantographs_id_seq'::regclass);
+ALTER TABLE ONLY public.pantographs ALTER COLUMN id SET DEFAULT nextval('public.pantographs_id_seq'::regclass);
 
 
 --
 -- Name: id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY rails_admin_histories ALTER COLUMN id SET DEFAULT nextval('rails_admin_histories_id_seq'::regclass);
+ALTER TABLE ONLY public.rails_admin_histories ALTER COLUMN id SET DEFAULT nextval('public.rails_admin_histories_id_seq'::regclass);
 
 
 --
 -- Name: id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY resources ALTER COLUMN id SET DEFAULT nextval('resources_id_seq'::regclass);
+ALTER TABLE ONLY public.resources ALTER COLUMN id SET DEFAULT nextval('public.resources_id_seq'::regclass);
 
 
 --
 -- Name: id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY sessions ALTER COLUMN id SET DEFAULT nextval('sessions_id_seq'::regclass);
+ALTER TABLE ONLY public.sessions ALTER COLUMN id SET DEFAULT nextval('public.sessions_id_seq'::regclass);
 
 
 --
 -- Name: id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY taggings ALTER COLUMN id SET DEFAULT nextval('taggings_id_seq'::regclass);
+ALTER TABLE ONLY public.taggings ALTER COLUMN id SET DEFAULT nextval('public.taggings_id_seq'::regclass);
 
 
 --
 -- Name: id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY tags ALTER COLUMN id SET DEFAULT nextval('tags_id_seq'::regclass);
+ALTER TABLE ONLY public.tags ALTER COLUMN id SET DEFAULT nextval('public.tags_id_seq'::regclass);
 
 
 --
 -- Name: id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY users ALTER COLUMN id SET DEFAULT nextval('users_id_seq'::regclass);
+ALTER TABLE ONLY public.users ALTER COLUMN id SET DEFAULT nextval('public.users_id_seq'::regclass);
 
 
 --
 -- Name: id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY versions ALTER COLUMN id SET DEFAULT nextval('versions_id_seq'::regclass);
+ALTER TABLE ONLY public.versions ALTER COLUMN id SET DEFAULT nextval('public.versions_id_seq'::regclass);
 
 
 --
 -- Name: id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY votes ALTER COLUMN id SET DEFAULT nextval('votes_id_seq'::regclass);
+ALTER TABLE ONLY public.votes ALTER COLUMN id SET DEFAULT nextval('public.votes_id_seq'::regclass);
 
 
 --
 -- Name: authorizations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY authorizations
+ALTER TABLE ONLY public.authorizations
     ADD CONSTRAINT authorizations_pkey PRIMARY KEY (id);
 
 
@@ -987,7 +1119,7 @@ ALTER TABLE ONLY authorizations
 -- Name: cloud_notes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY evernote_notes
+ALTER TABLE ONLY public.evernote_notes
     ADD CONSTRAINT cloud_notes_pkey PRIMARY KEY (id);
 
 
@@ -995,7 +1127,7 @@ ALTER TABLE ONLY evernote_notes
 -- Name: commontator_comments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY commontator_comments
+ALTER TABLE ONLY public.commontator_comments
     ADD CONSTRAINT commontator_comments_pkey PRIMARY KEY (id);
 
 
@@ -1003,7 +1135,7 @@ ALTER TABLE ONLY commontator_comments
 -- Name: commontator_subscriptions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY commontator_subscriptions
+ALTER TABLE ONLY public.commontator_subscriptions
     ADD CONSTRAINT commontator_subscriptions_pkey PRIMARY KEY (id);
 
 
@@ -1011,7 +1143,7 @@ ALTER TABLE ONLY commontator_subscriptions
 -- Name: commontator_threads_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY commontator_threads
+ALTER TABLE ONLY public.commontator_threads
     ADD CONSTRAINT commontator_threads_pkey PRIMARY KEY (id);
 
 
@@ -1019,7 +1151,7 @@ ALTER TABLE ONLY commontator_threads
 -- Name: notes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY notes
+ALTER TABLE ONLY public.notes
     ADD CONSTRAINT notes_pkey PRIMARY KEY (id);
 
 
@@ -1027,7 +1159,7 @@ ALTER TABLE ONLY notes
 -- Name: notes_sources_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY books_notes
+ALTER TABLE ONLY public.books_notes
     ADD CONSTRAINT notes_sources_pkey PRIMARY KEY (id);
 
 
@@ -1035,7 +1167,7 @@ ALTER TABLE ONLY books_notes
 -- Name: pantographers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY pantographers
+ALTER TABLE ONLY public.pantographers
     ADD CONSTRAINT pantographers_pkey PRIMARY KEY (id);
 
 
@@ -1043,7 +1175,7 @@ ALTER TABLE ONLY pantographers
 -- Name: pantographs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY pantographs
+ALTER TABLE ONLY public.pantographs
     ADD CONSTRAINT pantographs_pkey PRIMARY KEY (id);
 
 
@@ -1051,7 +1183,7 @@ ALTER TABLE ONLY pantographs
 -- Name: rails_admin_histories_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY rails_admin_histories
+ALTER TABLE ONLY public.rails_admin_histories
     ADD CONSTRAINT rails_admin_histories_pkey PRIMARY KEY (id);
 
 
@@ -1059,7 +1191,7 @@ ALTER TABLE ONLY rails_admin_histories
 -- Name: resources_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY resources
+ALTER TABLE ONLY public.resources
     ADD CONSTRAINT resources_pkey PRIMARY KEY (id);
 
 
@@ -1067,7 +1199,7 @@ ALTER TABLE ONLY resources
 -- Name: sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY sessions
+ALTER TABLE ONLY public.sessions
     ADD CONSTRAINT sessions_pkey PRIMARY KEY (id);
 
 
@@ -1075,7 +1207,7 @@ ALTER TABLE ONLY sessions
 -- Name: sources_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY books
+ALTER TABLE ONLY public.books
     ADD CONSTRAINT sources_pkey PRIMARY KEY (id);
 
 
@@ -1083,7 +1215,7 @@ ALTER TABLE ONLY books
 -- Name: taggings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY taggings
+ALTER TABLE ONLY public.taggings
     ADD CONSTRAINT taggings_pkey PRIMARY KEY (id);
 
 
@@ -1091,7 +1223,7 @@ ALTER TABLE ONLY taggings
 -- Name: tags_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY tags
+ALTER TABLE ONLY public.tags
     ADD CONSTRAINT tags_pkey PRIMARY KEY (id);
 
 
@@ -1099,7 +1231,7 @@ ALTER TABLE ONLY tags
 -- Name: users_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY users
+ALTER TABLE ONLY public.users
     ADD CONSTRAINT users_pkey PRIMARY KEY (id);
 
 
@@ -1107,7 +1239,7 @@ ALTER TABLE ONLY users
 -- Name: versions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY versions
+ALTER TABLE ONLY public.versions
     ADD CONSTRAINT versions_pkey PRIMARY KEY (id);
 
 
@@ -1115,7 +1247,7 @@ ALTER TABLE ONLY versions
 -- Name: votes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY votes
+ALTER TABLE ONLY public.votes
     ADD CONSTRAINT votes_pkey PRIMARY KEY (id);
 
 
@@ -1123,175 +1255,192 @@ ALTER TABLE ONLY votes
 -- Name: index_c_c_on_c_type_and_c_id_and_t_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX index_c_c_on_c_type_and_c_id_and_t_id ON commontator_comments USING btree (creator_type, creator_id, thread_id);
+CREATE INDEX index_c_c_on_c_type_and_c_id_and_t_id ON public.commontator_comments USING btree (creator_type, creator_id, thread_id);
 
 
 --
 -- Name: index_c_s_on_s_type_and_s_id_and_t_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX index_c_s_on_s_type_and_s_id_and_t_id ON commontator_subscriptions USING btree (subscriber_type, subscriber_id, thread_id);
+CREATE UNIQUE INDEX index_c_s_on_s_type_and_s_id_and_t_id ON public.commontator_subscriptions USING btree (subscriber_type, subscriber_id, thread_id);
 
 
 --
 -- Name: index_c_t_on_c_type_and_c_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX index_c_t_on_c_type_and_c_id ON commontator_threads USING btree (commontable_type, commontable_id);
+CREATE UNIQUE INDEX index_c_t_on_c_type_and_c_id ON public.commontator_threads USING btree (commontable_type, commontable_id);
 
 
 --
 -- Name: index_cloud_notes_on_note_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX index_cloud_notes_on_note_id ON evernote_notes USING btree (note_id);
+CREATE INDEX index_cloud_notes_on_note_id ON public.evernote_notes USING btree (note_id);
 
 
 --
 -- Name: index_commontator_comments_on_cached_votes_down; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX index_commontator_comments_on_cached_votes_down ON commontator_comments USING btree (cached_votes_down);
+CREATE INDEX index_commontator_comments_on_cached_votes_down ON public.commontator_comments USING btree (cached_votes_down);
 
 
 --
 -- Name: index_commontator_comments_on_cached_votes_total; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX index_commontator_comments_on_cached_votes_total ON commontator_comments USING btree (cached_votes_total);
+CREATE INDEX index_commontator_comments_on_cached_votes_total ON public.commontator_comments USING btree (cached_votes_total);
 
 
 --
 -- Name: index_commontator_comments_on_cached_votes_up; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX index_commontator_comments_on_cached_votes_up ON commontator_comments USING btree (cached_votes_up);
+CREATE INDEX index_commontator_comments_on_cached_votes_up ON public.commontator_comments USING btree (cached_votes_up);
 
 
 --
 -- Name: index_commontator_comments_on_thread_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX index_commontator_comments_on_thread_id ON commontator_comments USING btree (thread_id);
+CREATE INDEX index_commontator_comments_on_thread_id ON public.commontator_comments USING btree (thread_id);
 
 
 --
 -- Name: index_commontator_subscriptions_on_thread_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX index_commontator_subscriptions_on_thread_id ON commontator_subscriptions USING btree (thread_id);
+CREATE INDEX index_commontator_subscriptions_on_thread_id ON public.commontator_subscriptions USING btree (thread_id);
 
 
 --
 -- Name: index_rails_admin_histories; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX index_rails_admin_histories ON rails_admin_histories USING btree (item, "table", month, year);
+CREATE INDEX index_rails_admin_histories ON public.rails_admin_histories USING btree (item, "table", month, year);
 
 
 --
 -- Name: index_resources_on_cloud_resource_identifier_and_note_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX index_resources_on_cloud_resource_identifier_and_note_id ON resources USING btree (cloud_resource_identifier, note_id);
+CREATE UNIQUE INDEX index_resources_on_cloud_resource_identifier_and_note_id ON public.resources USING btree (cloud_resource_identifier, note_id);
 
 
 --
 -- Name: index_resources_on_note_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX index_resources_on_note_id ON resources USING btree (note_id);
+CREATE INDEX index_resources_on_note_id ON public.resources USING btree (note_id);
 
 
 --
 -- Name: index_sessions_on_session_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX index_sessions_on_session_id ON sessions USING btree (session_id);
+CREATE UNIQUE INDEX index_sessions_on_session_id ON public.sessions USING btree (session_id);
 
 
 --
 -- Name: index_sessions_on_updated_at; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX index_sessions_on_updated_at ON sessions USING btree (updated_at);
+CREATE INDEX index_sessions_on_updated_at ON public.sessions USING btree (updated_at);
 
 
 --
 -- Name: index_sources_on_slug; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX index_sources_on_slug ON books USING btree (slug);
+CREATE UNIQUE INDEX index_sources_on_slug ON public.books USING btree (slug);
 
 
 --
 -- Name: index_taggings_on_taggable_id_and_taggable_type_and_context; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX index_taggings_on_taggable_id_and_taggable_type_and_context ON taggings USING btree (taggable_id, taggable_type, context);
+CREATE INDEX index_taggings_on_taggable_id_and_taggable_type_and_context ON public.taggings USING btree (taggable_id, taggable_type, context);
 
 
 --
 -- Name: index_tags_on_name; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX index_tags_on_name ON tags USING btree (name);
+CREATE UNIQUE INDEX index_tags_on_name ON public.tags USING btree (name);
 
 
 --
 -- Name: index_tags_on_slug; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX index_tags_on_slug ON tags USING btree (slug);
+CREATE UNIQUE INDEX index_tags_on_slug ON public.tags USING btree (slug);
 
 
 --
 -- Name: index_users_on_confirmation_token; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX index_users_on_confirmation_token ON users USING btree (confirmation_token);
+CREATE UNIQUE INDEX index_users_on_confirmation_token ON public.users USING btree (confirmation_token);
 
 
 --
 -- Name: index_users_on_reset_password_token; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX index_users_on_reset_password_token ON users USING btree (reset_password_token);
+CREATE UNIQUE INDEX index_users_on_reset_password_token ON public.users USING btree (reset_password_token);
 
 
 --
 -- Name: index_versions_on_item_type_and_item_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX index_versions_on_item_type_and_item_id ON versions USING btree (item_type, item_id);
+CREATE INDEX index_versions_on_item_type_and_item_id ON public.versions USING btree (item_type, item_id);
 
 
 --
 -- Name: index_votes_on_votable_id_and_votable_type_and_vote_scope; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX index_votes_on_votable_id_and_votable_type_and_vote_scope ON votes USING btree (votable_id, votable_type, vote_scope);
+CREATE INDEX index_votes_on_votable_id_and_votable_type_and_vote_scope ON public.votes USING btree (votable_id, votable_type, vote_scope);
 
 
 --
 -- Name: index_votes_on_voter_id_and_voter_type_and_vote_scope; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX index_votes_on_voter_id_and_voter_type_and_vote_scope ON votes USING btree (voter_id, voter_type, vote_scope);
+CREATE INDEX index_votes_on_voter_id_and_voter_type_and_vote_scope ON public.votes USING btree (voter_id, voter_type, vote_scope);
 
 
 --
 -- Name: taggings_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX taggings_idx ON taggings USING btree (tag_id, taggable_id, taggable_type, context, tagger_id, tagger_type);
+CREATE UNIQUE INDEX taggings_idx ON public.taggings USING btree (tag_id, taggable_id, taggable_type, context, tagger_id, tagger_type);
 
 
 --
 -- Name: unique_schema_migrations; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX unique_schema_migrations ON schema_migrations USING btree (version);
+CREATE UNIQUE INDEX unique_schema_migrations ON public.schema_migrations USING btree (version);
+
+
+--
+-- Name: postgraphile_watch_ddl; Type: EVENT TRIGGER; Schema: -; Owner: -
+--
+
+CREATE EVENT TRIGGER postgraphile_watch_ddl ON ddl_command_end
+         WHEN TAG IN ('ALTER DOMAIN', 'ALTER FOREIGN TABLE', 'ALTER FUNCTION', 'ALTER SCHEMA', 'ALTER TABLE', 'ALTER TYPE', 'ALTER VIEW', 'COMMENT', 'CREATE DOMAIN', 'CREATE FOREIGN TABLE', 'CREATE FUNCTION', 'CREATE SCHEMA', 'CREATE TABLE', 'CREATE TABLE AS', 'CREATE VIEW', 'DROP DOMAIN', 'DROP FOREIGN TABLE', 'DROP FUNCTION', 'DROP SCHEMA', 'DROP TABLE', 'DROP VIEW', 'GRANT', 'REVOKE', 'SELECT INTO')
+   EXECUTE PROCEDURE postgraphile_watch.notify_watchers_ddl();
+
+
+--
+-- Name: postgraphile_watch_drop; Type: EVENT TRIGGER; Schema: -; Owner: -
+--
+
+CREATE EVENT TRIGGER postgraphile_watch_drop ON sql_drop
+   EXECUTE PROCEDURE postgraphile_watch.notify_watchers_drop();
 
 
 --
@@ -1588,4 +1737,6 @@ INSERT INTO schema_migrations (version) VALUES ('20150824083031');
 INSERT INTO schema_migrations (version) VALUES ('20171213111501');
 
 INSERT INTO schema_migrations (version) VALUES ('20171218151456');
+
+INSERT INTO schema_migrations (version) VALUES ('20180118102521');
 
