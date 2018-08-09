@@ -2,8 +2,8 @@
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 9.5.12
--- Dumped by pg_dump version 9.5.12
+-- Dumped from database version 9.5.13
+-- Dumped by pg_dump version 9.5.13
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -165,8 +165,8 @@ CREATE FUNCTION api.register_user(first_name text, last_name text, email text, p
         DECLARE
           person api.logged_in_user;
         BEGIN
-          INSERT INTO users (first_name, last_name, email, password) VALUES
-            (first_name, last_name, email, crypt(password, gen_salt('bf')))
+          INSERT INTO users (first_name, last_name, email, password, created_at, updated_at) VALUES
+            (first_name, last_name, email, crypt(password, gen_salt('bf')), current_timestamp, current_timestamp)
             RETURNING * INTO person;
           RETURN person;
         END;
@@ -177,7 +177,7 @@ CREATE FUNCTION api.register_user(first_name text, last_name text, email text, p
 -- Name: FUNCTION register_user(first_name text, last_name text, email text, password text); Type: COMMENT; Schema: api; Owner: -
 --
 
-COMMENT ON FUNCTION api.register_user(first_name text, last_name text, email text, password text) IS 'Registers a single user and creates an account in our forum.';
+COMMENT ON FUNCTION api.register_user(first_name text, last_name text, email text, password text) IS 'Registers a single user with normal permissions.';
 
 
 --

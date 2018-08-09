@@ -1,6 +1,5 @@
 class AddAuthenticationToUsers < ActiveRecord::Migration
   def up
-    remove_column :users, :role
     add_column :users, :role, :integer, default: 0, null: false
 
     connection.execute(%q{
@@ -27,14 +26,14 @@ class AddAuthenticationToUsers < ActiveRecord::Migration
         DECLARE
           person api.logged_in_user;
         BEGIN
-          INSERT INTO users (first_name, last_name, email, password) VALUES
-            (first_name, last_name, email, crypt(password, gen_salt('bf')))
+          INSERT INTO users (first_name, last_name, email, password, created_at, updated_at) VALUES
+            (first_name, last_name, email, crypt(password, gen_salt('bf')), current_timestamp, current_timestamp)
             RETURNING * INTO person;
           RETURN person;
         END;
       $$ language plpgsql strict security definer;
 
-      COMMENT ON FUNCTION api.register_user(text, text, text, text) IS 'Registers a single user and creates an account in our forum.';
+      COMMENT ON FUNCTION api.register_user(text, text, text, text) IS 'Registers a single user with normal permissions.';
 
 
       /* ************************************************************************ */
@@ -75,13 +74,13 @@ class AddAuthenticationToUsers < ActiveRecord::Migration
 
     connection.execute(%q{
       COMMENT ON FUNCTION api.register_user(text, text, text, text) IS null;
-      DROP FUNCTION api.register_user;
+      DROP FUNCTION api.register_user(text, text, text, text);
+
+      COMMENT ON FUNCTION api.authenticate(text, text) IS null;
+      DROP FUNCTION api.authenticate(text, text);
 
       DROP TYPE api.logged_in_user;
       DROP TYPE api.jwt_token;
-
-      COMMENT ON FUNCTION api.authenticate(text, text) IS null;
-      DROP FUNCTION api.authenticate;
     })
   end
 end
