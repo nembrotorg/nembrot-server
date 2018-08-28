@@ -2,8 +2,8 @@
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 9.5.13
--- Dumped by pg_dump version 9.5.13
+-- Dumped from database version 9.5.14
+-- Dumped by pg_dump version 9.5.14
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -75,11 +75,21 @@ CREATE TYPE api.denormalizedtags AS (
 
 
 --
+-- Name: found_user; Type: TYPE; Schema: api; Owner: -
+--
+
+CREATE TYPE api.found_user AS (
+	user_id integer,
+	encrypted_password text
+);
+
+
+--
 -- Name: jwt_token; Type: TYPE; Schema: api; Owner: -
 --
 
 CREATE TYPE api.jwt_token AS (
-	role integer,
+	role text,
 	user_id integer
 );
 
@@ -89,6 +99,7 @@ CREATE TYPE api.jwt_token AS (
 --
 
 CREATE TYPE api.logged_in_user AS (
+	user_id integer,
 	first_name text,
 	last_name text,
 	email text
@@ -128,19 +139,21 @@ COMMENT ON FUNCTION api.active_tags() IS 'Reads and enables pagination through a
 
 
 --
--- Name: authenticate(text, text); Type: FUNCTION; Schema: api; Owner: -
+-- Name: authenticate_user(text, text); Type: FUNCTION; Schema: api; Owner: -
 --
 
-CREATE FUNCTION api.authenticate(email text, password text) RETURNS api.jwt_token
+CREATE FUNCTION api.authenticate_user(email text, password text) RETURNS api.jwt_token
     LANGUAGE plpgsql STRICT SECURITY DEFINER
     AS $_$
+        DECLARE
+          person api.found_user;
         BEGIN
-          SELECT a.* AS authenticated_user
-          FROM users AS a
-          WHERE a.email = $1;
+          SELECT id, encrypted_password INTO person
+          FROM users
+          WHERE users.email = $1;
 
-          IF password = crypt(password, gen_salt('bf')) THEN
-            RETURN ('user', authenticated_user.id)::api.jwt_token;
+          IF person.encrypted_password = crypt(password, person.encrypted_password) THEN
+            RETURN ('user', person.user_id)::api.jwt_token;
           ELSE
             RETURN null;
           END IF;
@@ -149,10 +162,10 @@ CREATE FUNCTION api.authenticate(email text, password text) RETURNS api.jwt_toke
 
 
 --
--- Name: FUNCTION authenticate(email text, password text); Type: COMMENT; Schema: api; Owner: -
+-- Name: FUNCTION authenticate_user(email text, password text); Type: COMMENT; Schema: api; Owner: -
 --
 
-COMMENT ON FUNCTION api.authenticate(email text, password text) IS 'Creates a JWT token that will securely identify a person and give them certain permissions.';
+COMMENT ON FUNCTION api.authenticate_user(email text, password text) IS 'Creates a JWT token that will securely identify a person and give them certain permissions.';
 
 
 --
@@ -165,9 +178,9 @@ CREATE FUNCTION api.register_user(first_name text, last_name text, email text, p
         DECLARE
           person api.logged_in_user;
         BEGIN
-          INSERT INTO users (first_name, last_name, email, password, created_at, updated_at) VALUES
+          INSERT INTO users (first_name, last_name, email, encrypted_password, created_at, updated_at) VALUES
             (first_name, last_name, email, crypt(password, gen_salt('bf')), current_timestamp, current_timestamp)
-            RETURNING * INTO person;
+            RETURNING users.id, users.first_name, users.last_name, users.email INTO person;
           RETURN person;
         END;
       $$;

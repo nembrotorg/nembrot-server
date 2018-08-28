@@ -11,9 +11,10 @@ class AddAuthenticationToUsers < ActiveRecord::Migration
       /* Roles: public, user, reader, editor, author, admin */
 
       /* ************************************************************************ */
-      /* Create jwt type ******************************************************** */
+      /* Create logged_in_user type ********************************************* */
 
       CREATE TYPE api.logged_in_user AS (
+        user_id integer,
         first_name text,
         last_name text,
         email text
@@ -26,46 +27,57 @@ class AddAuthenticationToUsers < ActiveRecord::Migration
         DECLARE
           person api.logged_in_user;
         BEGIN
-          INSERT INTO users (first_name, last_name, email, password, created_at, updated_at) VALUES
+          INSERT INTO users (first_name, last_name, email, encrypted_password, created_at, updated_at) VALUES
             (first_name, last_name, email, crypt(password, gen_salt('bf')), current_timestamp, current_timestamp)
-            RETURNING * INTO person;
+            RETURNING users.id, users.first_name, users.last_name, users.email INTO person;
           RETURN person;
         END;
       $$ language plpgsql strict security definer;
 
-      COMMENT ON FUNCTION api.register_user(text, text, text, text) IS 'Registers a single user with normal permissions.';
+      COMMENT ON FUNCTION api.register_user(text, text, text, text)
+       IS 'Registers a single user with normal permissions.';
 
+
+       /* *********************************************************************** */
+       /* Create found user ***************************************************** */
+
+       CREATE TYPE api.found_user AS (
+         user_id integer,
+         encrypted_password text
+       );
 
       /* ************************************************************************ */
       /* Create jwt type ******************************************************** */
 
       CREATE TYPE api.jwt_token AS (
-        role integer,
+        role text,
         user_id integer
       );
-
 
       /* ************************************************************************ */
       /* Create authenticate function ******************************************* */
 
-      CREATE OR REPLACE FUNCTION api.authenticate(
+      CREATE OR REPLACE FUNCTION api.authenticate_user(
         email text,
         password text
       ) RETURNS api.jwt_token AS $$
+        DECLARE
+          person api.found_user;
         BEGIN
-          SELECT a.* AS authenticated_user
-          FROM users AS a
-          WHERE a.email = $1;
+          SELECT id, encrypted_password INTO person
+          FROM users
+          WHERE users.email = $1;
 
-          IF password = crypt(password, gen_salt('bf')) THEN
-            RETURN ('user', authenticated_user.id)::api.jwt_token;
+          IF person.encrypted_password = crypt(password, person.encrypted_password) THEN
+            RETURN ('user', person.user_id)::api.jwt_token;
           ELSE
             RETURN null;
           END IF;
         END;
       $$ language plpgsql strict security definer;
 
-      COMMENT ON FUNCTION api.authenticate(text, text) IS 'Creates a JWT token that will securely identify a person and give them certain permissions.';
+      COMMENT ON FUNCTION api.authenticate_user(text, text)
+       IS 'Creates a JWT token that will securely identify a person and give them certain permissions.';
     })
   end
 
@@ -76,9 +88,10 @@ class AddAuthenticationToUsers < ActiveRecord::Migration
       COMMENT ON FUNCTION api.register_user(text, text, text, text) IS null;
       DROP FUNCTION api.register_user(text, text, text, text);
 
-      COMMENT ON FUNCTION api.authenticate(text, text) IS null;
-      DROP FUNCTION api.authenticate(text, text);
+      COMMENT ON FUNCTION api.authenticate_user(text, text) IS null;
+      DROP FUNCTION api.authenticate_user(text, text);
 
+      DROP TYPE api.found_user;
       DROP TYPE api.logged_in_user;
       DROP TYPE api.jwt_token;
     })
