@@ -1,14 +1,16 @@
 class AddAuthenticationToUsers < ActiveRecord::Migration
   def up
-    add_column :users, :role, :integer, default: 0, null: false
-
     connection.execute(%q{
       /* https://github.com/postgraphql/postgraphql/blob/master/examples/forum/TUTORIAL.md#setting-up-your-schemas */
+
+      CREATE TYPE user_role AS ENUM ('public', 'registered', 'reader', 'editor', 'author', 'admin');
+
+      ALTER TABLE users ADD COLUMN role user_role;
 
       CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
       /* Create role in users */
-      /* Roles: public, user, reader, editor, author, admin */
+      /* Roles: unregistered, registered, reader, editor, author, admin */
 
       /* ************************************************************************ */
       /* Create logged_in_user type ********************************************* */
@@ -17,7 +19,8 @@ class AddAuthenticationToUsers < ActiveRecord::Migration
         user_id integer,
         first_name text,
         last_name text,
-        email text
+        email text,
+        role text
       );
 
       /* ************************************************************************ */
@@ -27,9 +30,9 @@ class AddAuthenticationToUsers < ActiveRecord::Migration
         DECLARE
           person api.logged_in_user;
         BEGIN
-          INSERT INTO users (first_name, last_name, email, encrypted_password, created_at, updated_at) VALUES
-            (first_name, last_name, email, crypt(password, gen_salt('bf')), current_timestamp, current_timestamp)
-            RETURNING users.id, users.first_name, users.last_name, users.email INTO person;
+          INSERT INTO users (first_name, last_name, email, role, encrypted_password, created_at, updated_at) VALUES
+            (first_name, last_name, email, 'registered', crypt(password, gen_salt('bf')), current_timestamp, current_timestamp)
+            RETURNING users.id, users.first_name, users.last_name, users.email, users.role INTO person;
           RETURN person;
         END;
       $$ language plpgsql strict security definer;
@@ -43,6 +46,9 @@ class AddAuthenticationToUsers < ActiveRecord::Migration
 
        CREATE TYPE api.found_user AS (
          user_id integer,
+         first_name text,
+         last_name text,
+         role text,
          encrypted_password text
        );
 
@@ -51,7 +57,9 @@ class AddAuthenticationToUsers < ActiveRecord::Migration
 
       CREATE TYPE api.jwt_token AS (
         role text,
-        user_id integer
+        user_id integer,
+        first_name text,
+        last_name text
       );
 
       /* ************************************************************************ */
@@ -64,12 +72,12 @@ class AddAuthenticationToUsers < ActiveRecord::Migration
         DECLARE
           person api.found_user;
         BEGIN
-          SELECT id, encrypted_password INTO person
+          SELECT id, first_name, last_name, role, encrypted_password INTO person
           FROM users
           WHERE users.email = $1;
 
           IF person.encrypted_password = crypt(password, person.encrypted_password) THEN
-            RETURN ('user', person.user_id)::api.jwt_token;
+            RETURN (person.role, person.user_id, person.first_name, person.last_name)::api.jwt_token;
           ELSE
             RETURN null;
           END IF;
@@ -82,9 +90,10 @@ class AddAuthenticationToUsers < ActiveRecord::Migration
   end
 
   def down
-    remove_column :users, :role
-
     connection.execute(%q{
+      ALTER TABLE users DROP COLUMN role;
+      DROP TYPE user_role;
+
       COMMENT ON FUNCTION api.register_user(text, text, text, text) IS null;
       DROP FUNCTION api.register_user(text, text, text, text);
 

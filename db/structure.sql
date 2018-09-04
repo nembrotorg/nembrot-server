@@ -80,6 +80,9 @@ CREATE TYPE api.denormalizedtags AS (
 
 CREATE TYPE api.found_user AS (
 	user_id integer,
+	first_name text,
+	last_name text,
+	role text,
 	encrypted_password text
 );
 
@@ -90,7 +93,9 @@ CREATE TYPE api.found_user AS (
 
 CREATE TYPE api.jwt_token AS (
 	role text,
-	user_id integer
+	user_id integer,
+	first_name text,
+	last_name text
 );
 
 
@@ -102,7 +107,22 @@ CREATE TYPE api.logged_in_user AS (
 	user_id integer,
 	first_name text,
 	last_name text,
-	email text
+	email text,
+	role text
+);
+
+
+--
+-- Name: user_role; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.user_role AS ENUM (
+    'public',
+    'registered',
+    'reader',
+    'editor',
+    'author',
+    'admin'
 );
 
 
@@ -148,12 +168,12 @@ CREATE FUNCTION api.authenticate_user(email text, password text) RETURNS api.jwt
         DECLARE
           person api.found_user;
         BEGIN
-          SELECT id, encrypted_password INTO person
+          SELECT id, first_name, last_name, role, encrypted_password INTO person
           FROM users
           WHERE users.email = $1;
 
           IF person.encrypted_password = crypt(password, person.encrypted_password) THEN
-            RETURN ('user', person.user_id)::api.jwt_token;
+            RETURN (person.role, person.user_id, person.first_name, person.last_name)::api.jwt_token;
           ELSE
             RETURN null;
           END IF;
@@ -178,9 +198,9 @@ CREATE FUNCTION api.register_user(first_name text, last_name text, email text, p
         DECLARE
           person api.logged_in_user;
         BEGIN
-          INSERT INTO users (first_name, last_name, email, encrypted_password, created_at, updated_at) VALUES
-            (first_name, last_name, email, crypt(password, gen_salt('bf')), current_timestamp, current_timestamp)
-            RETURNING users.id, users.first_name, users.last_name, users.email INTO person;
+          INSERT INTO users (first_name, last_name, email, role, encrypted_password, created_at, updated_at) VALUES
+            (first_name, last_name, email, 'registered', crypt(password, gen_salt('bf')), current_timestamp, current_timestamp)
+            RETURNING users.id, users.first_name, users.last_name, users.email, users.role INTO person;
           RETURN person;
         END;
       $$;
@@ -894,7 +914,7 @@ CREATE TABLE public.users (
     confirmation_sent_at timestamp without time zone,
     unconfirmed_email character varying(255),
     remember_token character varying(255),
-    role integer DEFAULT 0 NOT NULL
+    role public.user_role
 );
 
 
@@ -1752,4 +1772,10 @@ INSERT INTO schema_migrations (version) VALUES ('20171213111501');
 INSERT INTO schema_migrations (version) VALUES ('20171218151456');
 
 INSERT INTO schema_migrations (version) VALUES ('20180118102521');
+
+INSERT INTO schema_migrations (version) VALUES ('20180901204204');
+
+INSERT INTO schema_migrations (version) VALUES ('20180904164907');
+
+INSERT INTO schema_migrations (version) VALUES ('20180904171751');
 
