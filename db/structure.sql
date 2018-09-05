@@ -117,13 +117,88 @@ CREATE TYPE api.logged_in_user AS (
 --
 
 CREATE TYPE public.user_role AS ENUM (
-    'public',
+    'unregistered',
     'registered',
     'reader',
     'editor',
     'author',
     'admin'
 );
+
+
+SET default_tablespace = '';
+
+SET default_with_oids = false;
+
+--
+-- Name: notes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.notes (
+    id integer NOT NULL,
+    title character varying(255) NOT NULL,
+    body text,
+    created_at timestamp without time zone NOT NULL,
+    updated_at timestamp without time zone NOT NULL,
+    external_updated_at timestamp without time zone NOT NULL,
+    latitude double precision,
+    longitude double precision,
+    altitude double precision,
+    lang character varying(2),
+    active boolean,
+    author character varying(255),
+    source character varying(255),
+    source_url character varying(255),
+    source_application character varying(255),
+    last_edited_by character varying(255),
+    hide boolean,
+    is_citation boolean DEFAULT false,
+    listable boolean DEFAULT true,
+    word_count integer,
+    distance integer,
+    place character varying(255),
+    content_class character varying(255),
+    introduction text,
+    feature character varying(255),
+    feature_id character varying(255),
+    is_feature boolean,
+    is_section boolean,
+    is_mapped boolean,
+    is_promoted boolean,
+    weight integer,
+    content_type integer DEFAULT 0 NOT NULL,
+    url character varying(255),
+    url_author character varying(255),
+    url_html bytea,
+    url_lede text,
+    url_title character varying(255),
+    url_updated_at timestamp without time zone,
+    url_accessed_at timestamp without time zone,
+    url_lang character varying,
+    url_domain character varying,
+    cached_body_html text,
+    cached_blurb_html character varying,
+    cached_headline character varying,
+    cached_subheadline character varying,
+    cached_url character varying,
+    role public.user_role DEFAULT 'unregistered'::public.user_role
+);
+
+
+--
+-- Name: active_notes(); Type: FUNCTION; Schema: api; Owner: -
+--
+
+CREATE FUNCTION api.active_notes() RETURNS SETOF public.notes
+    LANGUAGE sql STABLE
+    AS $$
+        SELECT *
+         FROM notes
+         WHERE notes.active = 't'
+           AND notes.hide = 'f'
+           AND notes.role <= current_setting('jwt.claims.role')::user_role
+         ORDER BY weight ASC, external_updated_at DESC
+      $$;
 
 
 --
@@ -278,10 +353,6 @@ CREATE FUNCTION public.active_notes_id() RETURNS TABLE(id integer)
          ORDER BY weight ASC, external_updated_at DESC
       $$;
 
-
-SET default_tablespace = '';
-
-SET default_with_oids = false;
 
 --
 -- Name: authorizations; Type: TABLE; Schema: public; Owner: -
@@ -549,60 +620,6 @@ CREATE SEQUENCE public.evernote_notes_id_seq
 --
 
 ALTER SEQUENCE public.evernote_notes_id_seq OWNED BY public.evernote_notes.id;
-
-
---
--- Name: notes; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.notes (
-    id integer NOT NULL,
-    title character varying(255) NOT NULL,
-    body text,
-    created_at timestamp without time zone NOT NULL,
-    updated_at timestamp without time zone NOT NULL,
-    external_updated_at timestamp without time zone NOT NULL,
-    latitude double precision,
-    longitude double precision,
-    altitude double precision,
-    lang character varying(2),
-    active boolean,
-    author character varying(255),
-    source character varying(255),
-    source_url character varying(255),
-    source_application character varying(255),
-    last_edited_by character varying(255),
-    hide boolean,
-    is_citation boolean DEFAULT false,
-    listable boolean DEFAULT true,
-    word_count integer,
-    distance integer,
-    place character varying(255),
-    content_class character varying(255),
-    introduction text,
-    feature character varying(255),
-    feature_id character varying(255),
-    is_feature boolean,
-    is_section boolean,
-    is_mapped boolean,
-    is_promoted boolean,
-    weight integer,
-    content_type integer DEFAULT 0 NOT NULL,
-    url character varying(255),
-    url_author character varying(255),
-    url_html bytea,
-    url_lede text,
-    url_title character varying(255),
-    url_updated_at timestamp without time zone,
-    url_accessed_at timestamp without time zone,
-    url_lang character varying,
-    url_domain character varying,
-    cached_body_html text,
-    cached_blurb_html character varying,
-    cached_headline character varying,
-    cached_subheadline character varying,
-    cached_url character varying
-);
 
 
 --
@@ -1486,6 +1503,20 @@ CREATE EVENT TRIGGER postgraphql_watch ON ddl_command_end
 
 
 --
+-- Name: select_notes_registered; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY select_notes_registered ON public.notes FOR SELECT TO registered USING ((role <= (current_setting('jwt.claims.role'::text))::public.user_role));
+
+
+--
+-- Name: select_notes_unregistered; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY select_notes_unregistered ON public.notes FOR SELECT TO unregistered USING ((role = 'unregistered'::public.user_role));
+
+
+--
 -- PostgreSQL database dump complete
 --
 
@@ -1778,4 +1809,12 @@ INSERT INTO schema_migrations (version) VALUES ('20180901204204');
 INSERT INTO schema_migrations (version) VALUES ('20180904164907');
 
 INSERT INTO schema_migrations (version) VALUES ('20180904171751');
+
+INSERT INTO schema_migrations (version) VALUES ('20180905083829');
+
+INSERT INTO schema_migrations (version) VALUES ('20180905110921');
+
+INSERT INTO schema_migrations (version) VALUES ('20180905123915');
+
+INSERT INTO schema_migrations (version) VALUES ('20180905165240');
 
