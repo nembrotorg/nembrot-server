@@ -126,81 +126,6 @@ CREATE TYPE public.user_role AS ENUM (
 );
 
 
-SET default_tablespace = '';
-
-SET default_with_oids = false;
-
---
--- Name: notes; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.notes (
-    id integer NOT NULL,
-    title character varying(255) NOT NULL,
-    body text,
-    created_at timestamp without time zone NOT NULL,
-    updated_at timestamp without time zone NOT NULL,
-    external_updated_at timestamp without time zone NOT NULL,
-    latitude double precision,
-    longitude double precision,
-    altitude double precision,
-    lang character varying(2),
-    active boolean,
-    author character varying(255),
-    source character varying(255),
-    source_url character varying(255),
-    source_application character varying(255),
-    last_edited_by character varying(255),
-    hide boolean,
-    is_citation boolean DEFAULT false,
-    listable boolean DEFAULT true,
-    word_count integer,
-    distance integer,
-    place character varying(255),
-    content_class character varying(255),
-    introduction text,
-    feature character varying(255),
-    feature_id character varying(255),
-    is_feature boolean,
-    is_section boolean,
-    is_mapped boolean,
-    is_promoted boolean,
-    weight integer,
-    content_type integer DEFAULT 0 NOT NULL,
-    url character varying(255),
-    url_author character varying(255),
-    url_html bytea,
-    url_lede text,
-    url_title character varying(255),
-    url_updated_at timestamp without time zone,
-    url_accessed_at timestamp without time zone,
-    url_lang character varying,
-    url_domain character varying,
-    cached_body_html text,
-    cached_blurb_html character varying,
-    cached_headline character varying,
-    cached_subheadline character varying,
-    cached_url character varying,
-    role public.user_role DEFAULT 'unregistered'::public.user_role
-);
-
-
---
--- Name: active_notes(); Type: FUNCTION; Schema: api; Owner: -
---
-
-CREATE FUNCTION api.active_notes() RETURNS SETOF public.notes
-    LANGUAGE sql STABLE
-    AS $$
-        SELECT *
-         FROM notes
-         WHERE notes.active = 't'
-           AND notes.hide = 'f'
-           AND notes.role <= current_setting('jwt.claims.role')::user_role
-         ORDER BY weight ASC, external_updated_at DESC
-      $$;
-
-
 --
 -- Name: active_tags(); Type: FUNCTION; Schema: api; Owner: -
 --
@@ -263,6 +188,94 @@ CREATE FUNCTION api.authenticate_user(email text, password text) RETURNS api.jwt
 COMMENT ON FUNCTION api.authenticate_user(email text, password text) IS 'Creates a JWT token that will securely identify a person and give them certain permissions.';
 
 
+SET default_tablespace = '';
+
+SET default_with_oids = false;
+
+--
+-- Name: notes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.notes (
+    id integer NOT NULL,
+    title character varying(255) NOT NULL,
+    body text,
+    created_at timestamp without time zone NOT NULL,
+    updated_at timestamp without time zone NOT NULL,
+    external_updated_at timestamp without time zone NOT NULL,
+    latitude double precision,
+    longitude double precision,
+    altitude double precision,
+    lang character varying(2),
+    author character varying(255),
+    source character varying(255),
+    source_url character varying(255),
+    source_application character varying(255),
+    last_edited_by character varying(255),
+    listable boolean DEFAULT true,
+    word_count integer,
+    distance integer,
+    place character varying(255),
+    content_class character varying(255),
+    introduction text,
+    feature character varying(255),
+    feature_id character varying(255),
+    is_feature boolean,
+    is_section boolean,
+    is_mapped boolean,
+    is_promoted boolean,
+    weight integer,
+    content_type integer DEFAULT 0 NOT NULL,
+    url character varying(255),
+    url_author character varying(255),
+    url_html bytea,
+    url_lede text,
+    url_title character varying(255),
+    url_updated_at timestamp without time zone,
+    url_accessed_at timestamp without time zone,
+    url_lang character varying,
+    url_domain character varying,
+    cached_body_html text,
+    cached_blurb_html character varying,
+    cached_headline character varying,
+    cached_subheadline character varying,
+    cached_url character varying,
+    role character varying DEFAULT 'unregistered'::character varying
+);
+
+
+--
+-- Name: citations(); Type: FUNCTION; Schema: api; Owner: -
+--
+
+CREATE FUNCTION api.citations() RETURNS SETOF public.notes
+    LANGUAGE sql STABLE
+    AS $$
+        SELECT *
+         FROM notes
+         WHERE notes.content_type = 1
+           AND notes.listable = 't'
+           AND (notes.role)::user_role <= current_setting('role')::user_role
+         ORDER BY external_updated_at DESC
+      $$;
+
+
+--
+-- Name: links(); Type: FUNCTION; Schema: api; Owner: -
+--
+
+CREATE FUNCTION api.links() RETURNS SETOF public.notes
+    LANGUAGE sql STABLE
+    AS $$
+        SELECT *
+         FROM notes
+         WHERE notes.content_type = 2
+           AND notes.listable = 't'
+           AND (notes.role)::user_role <= current_setting('role')::user_role
+         ORDER BY external_updated_at DESC
+      $$;
+
+
 --
 -- Name: register_user(text, text, text, text); Type: FUNCTION; Schema: api; Owner: -
 --
@@ -286,6 +299,22 @@ CREATE FUNCTION api.register_user(first_name text, last_name text, email text, p
 --
 
 COMMENT ON FUNCTION api.register_user(first_name text, last_name text, email text, password text) IS 'Registers a single user with normal permissions.';
+
+
+--
+-- Name: texts(); Type: FUNCTION; Schema: api; Owner: -
+--
+
+CREATE FUNCTION api.texts() RETURNS SETOF public.notes
+    LANGUAGE sql STABLE
+    AS $$
+        SELECT *
+         FROM notes
+         WHERE notes.content_type = 0
+           AND notes.listable = 't'
+           AND (notes.role)::user_role <= current_setting('role')::user_role
+         ORDER BY external_updated_at DESC
+      $$;
 
 
 --
@@ -350,6 +379,8 @@ CREATE FUNCTION public.active_notes_id() RETURNS TABLE(id integer)
          FROM notes
          WHERE notes.active = 't'
            AND notes.hide = 'f'
+           AND notes.listable = 't'
+           AND (notes.role)::user_role <= current_setting('role')::user_role
          ORDER BY weight ASC, external_updated_at DESC
       $$;
 
@@ -1506,14 +1537,14 @@ CREATE EVENT TRIGGER postgraphql_watch ON ddl_command_end
 -- Name: select_notes_registered; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY select_notes_registered ON public.notes FOR SELECT TO registered USING ((role <= (current_setting('jwt.claims.role'::text))::public.user_role));
+CREATE POLICY select_notes_registered ON public.notes FOR SELECT TO registered USING (((role)::public.user_role <= (current_setting('jwt.claims.role'::text))::public.user_role));
 
 
 --
 -- Name: select_notes_unregistered; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY select_notes_unregistered ON public.notes FOR SELECT TO unregistered USING ((role = 'unregistered'::public.user_role));
+CREATE POLICY select_notes_unregistered ON public.notes FOR SELECT TO unregistered USING (((role)::text = 'unregistered'::text));
 
 
 --
@@ -1817,4 +1848,20 @@ INSERT INTO schema_migrations (version) VALUES ('20180905110921');
 INSERT INTO schema_migrations (version) VALUES ('20180905123915');
 
 INSERT INTO schema_migrations (version) VALUES ('20180905165240');
+
+INSERT INTO schema_migrations (version) VALUES ('20180907093438');
+
+INSERT INTO schema_migrations (version) VALUES ('20180907102034');
+
+INSERT INTO schema_migrations (version) VALUES ('20180907102539');
+
+INSERT INTO schema_migrations (version) VALUES ('20180907140545');
+
+INSERT INTO schema_migrations (version) VALUES ('20180908072810');
+
+INSERT INTO schema_migrations (version) VALUES ('20180908082332');
+
+INSERT INTO schema_migrations (version) VALUES ('20180909060041');
+
+INSERT INTO schema_migrations (version) VALUES ('20180909062837');
 

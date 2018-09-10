@@ -248,14 +248,14 @@ class Note < ActiveRecord::Base
   end
 
   def update_lang(content = "#{ title } #{ clean_body }")
-    lang_instruction = Array(instruction_list).find { |v| v =~ /__LANG_/ }
-    if lang_instruction
-     lang = lang_instruction.gsub(/__LANG_/, '').downcase
-    else
-      response = DetectLanguage.simple_detect(content[0..NB.detect_language_sample_length.to_i])
-      lang = Array(response.match(/^\w\w$/)).size == 1 ? response : nil
-    end
-    self.lang = lang
+    # lang_instruction = Array(instruction_list).find { |v| v =~ /__LANG_/ }
+    # if lang_instruction
+    #  lang = lang_instruction.gsub(/__LANG_/, '').downcase
+    # else
+    #   response = DetectLanguage.simple_detect(content[0..NB.detect_language_sample_length.to_i])
+    #   lang = Array(response.match(/^\w\w$/)).size == 1 ? response : nil
+    # end
+    self.lang = 'EN'
   end
 
   def update_weight
