@@ -13,7 +13,6 @@ class User < ActiveRecord::Base
   has_many :authorizations, dependent: :destroy
 
   has_paper_trail
-  acts_as_commontator
 
   def self.new_with_session(params, session)
     if session['devise.user_attributes']

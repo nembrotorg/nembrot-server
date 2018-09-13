@@ -220,9 +220,6 @@ definitions:
       count:
         type: integer
         description: Number of texts available in all pages.
-      paginates_per:
-        type: integer
-        description: Maximum number of texts in a single pages.
       page_number:
         type: integer
         description: Page number of the array in texts.

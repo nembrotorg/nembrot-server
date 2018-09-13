@@ -13,8 +13,6 @@ class Note < ActiveRecord::Base
 
   enum content_type: [ :note, :citation, :link ]
 
-  acts_as_commontable
-
   acts_as_taggable_on :tags, :instructions, :keywords
 
   has_paper_trail on: [:update],
@@ -38,7 +36,6 @@ class Note < ActiveRecord::Base
   scope :listable, -> { note.where(listable: true) }
   # scope :mappable, -> { where (is_mapped: true) }
   scope :processed_urls, -> { where.not(url_accessed_at: nil) }
-  scope :publishable, -> { where(active: true, hide: false) }
   scope :unprocessed_urls, -> { where(url_accessed_at: nil) }
   scope :weighted, -> { order('weight ASC') }
 
@@ -53,8 +50,6 @@ class Note < ActiveRecord::Base
   before_save :cache_html_columns
   after_save :scan_note_for_isbns, if: :body_changed?
   after_save :queue_url_decoration
-
-  paginates_per NB.notes_index_per_page.to_i
 
   # REVIEW: Store in columns like is_section?
   def self.mappable
@@ -85,11 +80,11 @@ class Note < ActiveRecord::Base
   end
 
   def self.related_notes(note_ids)
-    note.publishable.where(id: note_ids)
+    note.where(id: note_ids)
   end
 
   def self.related_citations(citation_ids)
-    citation.publishable.where(id: citation_ids)
+    citation.where(id: citation_ids)
   end
 
   def has_instruction?(instruction, instructions = instruction_list)
@@ -282,7 +277,11 @@ class Note < ActiveRecord::Base
       self.cached_body_html = bodify(body)
       self.cached_headline = format_headline(main_title, subtitle)
       self.cached_blurb_html = format_blurb(cached_headline, clean_body, introduction) if content_type == 'note'
-      self.cached_blurb_html = format_citation_blurb(clean_body) if content_type == 'citation'
+      if content_type == 'citation'
+        formatted_citation = format_citation_blurb(clean_body)
+        self.cached_blurb_html = formatted_citation[0]
+        self.cached_source_html = formatted_citation[1]
+      end
     end
   end
 
@@ -349,7 +348,7 @@ class Note < ActiveRecord::Base
   end
 
   def update_is_hidable?
-    self.hide = has_instruction?('hide')
+    self.role = 'admin' if has_instruction?('hide') || has_instruction?('admin')
   end
 
   def update_is_feature?

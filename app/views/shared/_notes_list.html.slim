@@ -1,9 +1,0 @@
-section.notes
-
-  header
-    h3 = title ||= t('notes.index.title')
-
-  ul
-    - notes.each do |note|
-      li
-        = render 'shared/note_blurb', note: note

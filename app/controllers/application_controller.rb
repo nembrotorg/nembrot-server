@@ -18,7 +18,7 @@ class ApplicationController < ActionController::Base
   end
 
   def get_promoted_notes
-    @promoted_notes = Note.publishable.listable.blurbable.promotable
+    @promoted_notes = Note.listable.blurbable.promotable
   end
 
   def get_sections
@@ -51,7 +51,7 @@ class ApplicationController < ActionController::Base
   end
 
   def note_tags(note)
-    @tags = note.tags.to_a.keep_if { |tag| Note.publishable.tagged_with(tag).size >= NB.tags_minimum.to_i }
+    @tags = note.tags.to_a.keep_if { |tag| Note.tagged_with(tag).size >= NB.tags_minimum.to_i }
   end
 
   def note_map(note)
