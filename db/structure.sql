@@ -240,7 +240,8 @@ CREATE TABLE public.notes (
     cached_headline character varying,
     cached_subheadline character varying,
     cached_url character varying,
-    role character varying DEFAULT 'unregistered'::character varying
+    role character varying DEFAULT 'unregistered'::character varying,
+    cached_source_html character varying
 );
 
 
@@ -255,6 +256,8 @@ CREATE FUNCTION api.citations() RETURNS SETOF public.notes
          FROM notes
          WHERE notes.content_type = 1
            AND notes.listable = 't'
+           AND notes.cached_url IS NOT NULL
+           AND notes.cached_blurb_html IS NOT NULL
            AND (notes.role)::user_role <= current_setting('role')::user_role
          ORDER BY external_updated_at DESC
       $$;
@@ -271,6 +274,9 @@ CREATE FUNCTION api.links() RETURNS SETOF public.notes
          FROM notes
          WHERE notes.content_type = 2
            AND notes.listable = 't'
+           AND notes.cached_url IS NOT NULL
+           AND notes.cached_blurb_html IS NOT NULL
+           AND notes.cached_source_html IS NOT NULL
            AND (notes.role)::user_role <= current_setting('role')::user_role
          ORDER BY external_updated_at DESC
       $$;
@@ -312,6 +318,8 @@ CREATE FUNCTION api.texts() RETURNS SETOF public.notes
          FROM notes
          WHERE notes.content_type = 0
            AND notes.listable = 't'
+           AND notes.cached_url IS NOT NULL
+           AND notes.cached_blurb_html IS NOT NULL
            AND (notes.role)::user_role <= current_setting('role')::user_role
          ORDER BY external_updated_at DESC
       $$;
@@ -377,9 +385,7 @@ CREATE FUNCTION public.active_notes_id() RETURNS TABLE(id integer)
     AS $$
         SELECT notes.id
          FROM notes
-         WHERE notes.active = 't'
-           AND notes.hide = 'f'
-           AND notes.listable = 't'
+         WHERE notes.listable = 't'
            AND (notes.role)::user_role <= current_setting('role')::user_role
          ORDER BY weight ASC, external_updated_at DESC
       $$;
