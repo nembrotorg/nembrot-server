@@ -246,6 +246,21 @@ CREATE TABLE public.notes (
 
 
 --
+-- Name: citation(integer); Type: FUNCTION; Schema: api; Owner: -
+--
+
+CREATE FUNCTION api.citation(uid integer) RETURNS public.notes
+    LANGUAGE sql STABLE
+    AS $$
+        SELECT *
+         FROM notes
+         WHERE notes.id = uid
+           AND notes.content_type = 1
+           AND (notes.role)::user_role <= current_setting('role')::user_role
+      $$;
+
+
+--
 -- Name: citations(); Type: FUNCTION; Schema: api; Owner: -
 --
 
@@ -258,8 +273,24 @@ CREATE FUNCTION api.citations() RETURNS SETOF public.notes
            AND notes.listable = 't'
            AND notes.cached_url IS NOT NULL
            AND notes.cached_blurb_html IS NOT NULL
+           AND notes.cached_source_html IS NOT NULL
            AND (notes.role)::user_role <= current_setting('role')::user_role
          ORDER BY external_updated_at DESC
+      $$;
+
+
+--
+-- Name: link(integer); Type: FUNCTION; Schema: api; Owner: -
+--
+
+CREATE FUNCTION api.link(uid integer) RETURNS public.notes
+    LANGUAGE sql STABLE
+    AS $$
+        SELECT *
+         FROM notes
+         WHERE notes.id = uid
+           AND notes.content_type = 2
+           AND (notes.role)::user_role <= current_setting('role')::user_role
       $$;
 
 
@@ -274,9 +305,6 @@ CREATE FUNCTION api.links() RETURNS SETOF public.notes
          FROM notes
          WHERE notes.content_type = 2
            AND notes.listable = 't'
-           AND notes.cached_url IS NOT NULL
-           AND notes.cached_blurb_html IS NOT NULL
-           AND notes.cached_source_html IS NOT NULL
            AND (notes.role)::user_role <= current_setting('role')::user_role
          ORDER BY external_updated_at DESC
       $$;
@@ -305,6 +333,21 @@ CREATE FUNCTION api.register_user(first_name text, last_name text, email text, p
 --
 
 COMMENT ON FUNCTION api.register_user(first_name text, last_name text, email text, password text) IS 'Registers a single user with normal permissions.';
+
+
+--
+-- Name: text(integer); Type: FUNCTION; Schema: api; Owner: -
+--
+
+CREATE FUNCTION api.text(uid integer) RETURNS public.notes
+    LANGUAGE sql STABLE
+    AS $$
+        SELECT *
+         FROM notes
+         WHERE notes.id = uid
+           AND notes.content_type = 0
+           AND (notes.role)::user_role <= current_setting('role')::user_role
+      $$;
 
 
 --
@@ -1870,4 +1913,6 @@ INSERT INTO schema_migrations (version) VALUES ('20180908082332');
 INSERT INTO schema_migrations (version) VALUES ('20180909060041');
 
 INSERT INTO schema_migrations (version) VALUES ('20180909062837');
+
+INSERT INTO schema_migrations (version) VALUES ('20190322155041');
 

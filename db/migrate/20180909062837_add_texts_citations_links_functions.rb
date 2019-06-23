@@ -29,6 +29,7 @@ class AddTextsCitationsLinksFunctions < ActiveRecord::Migration
            AND notes.listable = 't'
            AND notes.cached_url IS NOT NULL
            AND notes.cached_blurb_html IS NOT NULL
+           AND notes.cached_source_html IS NOT NULL
            AND (notes.role)::user_role <= current_setting('role')::user_role
          ORDER BY external_updated_at DESC
       $$ language sql stable;
@@ -38,9 +39,6 @@ class AddTextsCitationsLinksFunctions < ActiveRecord::Migration
          FROM notes
          WHERE notes.content_type = 2
            AND notes.listable = 't'
-           AND notes.cached_url IS NOT NULL
-           AND notes.cached_blurb_html IS NOT NULL
-           AND notes.cached_source_html IS NOT NULL
            AND (notes.role)::user_role <= current_setting('role')::user_role
          ORDER BY external_updated_at DESC
       $$ language sql stable;
@@ -48,7 +46,7 @@ class AddTextsCitationsLinksFunctions < ActiveRecord::Migration
   end
 
   def down
-    drop_column :notes, :cached_source_html
+    remove_column :notes, :cached_source_html
 
     connection.execute(%q{
       DROP FUNCTION api.active_notes_id();

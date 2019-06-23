@@ -273,7 +273,7 @@ class Note < ActiveRecord::Base
 
   def cache_html_columns
     unless body.blank?
-      self.cached_url = urlify(id, is_feature, feature, feature_id)
+      self.cached_url = urlify(content_type, id, is_feature, feature, feature_id)
       self.cached_body_html = bodify(body)
       self.cached_headline = format_headline(main_title, subtitle)
       self.cached_blurb_html = format_blurb(cached_headline, clean_body, introduction) if content_type == 'note'
@@ -332,7 +332,7 @@ class Note < ActiveRecord::Base
   end
 
   def minor_edit?
-    # Should we consider all canges in title a major edit?
+    # Should we consider all changes in title a major edit?
     return false if new_record?
     too_recent = ((external_updated_at - external_updated_at_was) * 1.minutes) < NB.version_gap_minutes.to_i.minutes
     too_minor = get_real_distance < NB.version_gap_distance.to_i

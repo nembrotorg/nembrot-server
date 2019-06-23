@@ -3,7 +3,9 @@
 module Blurbable
   extend ActiveSupport::Concern
 
-  def urlify(id, is_feature, feature, feature_id)
+  def urlify(content_type, id, is_feature, feature, feature_id)
+    return "/citations/#{ id }" if content_type == 'citation'
+    return "/links/#{ id }" if content_type == 'link'
     return is_feature ? (feature_id ? "/#{ feature }/#{ feature_id }" : "/#{ feature }") : "/texts/#{ id }" # texts should be in CONFIG
   end
 
