@@ -8,7 +8,7 @@ set :repo_url, 'git@github.com:joegattnet/joegattnet_v3.git'
 set :ssh_options, { forward_agent: true, keys: ["config/deploy_id_rsa"] } if File.exist?("config/deploy_id_rsa")
 
 # FIXME: This needs to be hidden
-set :slack_webhook, 'https://hooks.slack.com/services/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'
+set :slack_webhook, 'https://hooks.slack.com/services/XXXXXXXXXXXX/XXXXXXXXXXXXX/XXXXXXXXXXXXXXX'
 
 # Default branch is :master
 # ask :branch, `git rev-parse --abbrev-ref HEAD`.chomp
@@ -42,7 +42,7 @@ set :linked_dirs, fetch(:linked_dirs, []).push('log', 'tmp/pids', 'tmp/cache', '
 
 set :rvm_ruby_version, '2.1.5'
 
-set :datadog_api_key, 'd61c085faa7b4c1686333e3eafd1fb3e'
+set :datadog_api_key, 'XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
 
 after 'deploy:publishing', 'deploy:restart'
 namespace :deploy do
