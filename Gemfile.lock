@@ -119,7 +119,7 @@ GEM
       safe_yaml (~> 1.0.0)
     crass (1.0.3)
     daemons (1.2.6)
-    dalli (2.7.6)
+    dalli (3.2.3)
     database_cleaner (1.0.1)
     debug_inspector (0.0.3)
     detect_language (1.0.7)
